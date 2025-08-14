@@ -123,7 +123,7 @@ export default function App() {
       position: positionProperty,
       orientation: new Cesium.VelocityOrientationProperty(positionProperty),
       model: {
-        uri: "/models/boat_a.glb",
+        uri: "/models/boat.glb",
         scale: 20,
         minimumPixelSize: 50,
       },
