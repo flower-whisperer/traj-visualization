@@ -28,3 +28,35 @@ If you are developing a production application, we recommend using TypeScript wi
 问题：海水太暗，渔船太小看不清，渔船太大覆盖轨迹太多，轨迹太短
 
 ![1755164555381](image/README/1755164555381.png)
+
+### 0815
+
+这个好像是NASA做的可视化，看起来很牛【【中字】海洋的律动：令人着迷的洋流数据可视化模型】 https://www.bilibili.com/video/BV1pMVaz5EUs/?share_source=copy_web&vd_source=fc070803b757e0e1cc734f0d5b241b0b
+
+感觉可以把洋流可视化也做进来，效果比较唬人
+
+这样一些水文数据：海洋温度、海洋盐度分布也可以做进来
+
+![1755342987349](image/README/1755342987349.png)
+
+![1755342975512](image/README/1755342975512.png)
+
+我还发现了一个海洋可视化的网站，还是实时更新的
+
+https://earth.nullschool.net/zh-cn/
+
+![1755343032606](image/README/1755343032606.png)
+
+这些效果太强了，我连对应的数据集都没找到在哪
+
+先把这个东西放放，后面有时间再来做
+
+### 0816
+
+把轨迹上传功能加进来
+
+轨迹太短，渔船模型太小，海洋太深看不清渔船的位置，但轨迹确实已经可以显示出来了，也做了多船的控制和视角移动
+
+![1755343109003](image/README/1755343109003.png)
+
+下一步准备做捕鱼/禁渔区的标记了
