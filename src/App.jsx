@@ -1,16 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import Papa from 'papaparse' // 保留你的 papaparse
+import 'cesium/Build/Cesium/Widgets/widgets.css'
 
 export default function App() {
   const containerRef = useRef(null)
   const viewerRef = useRef(null)
+
+  // —— 多边形绘制相关 —— //
+  const positionsRef = useRef([])       // 当前正在绘制的经纬度点 [[lon,lat], ...]
+  const drawHandlerRef = useRef(null)   // 多边形绘制事件处理器
+
+  // —— 你原有的 handler（用于停止自转与首次飞行） —— //
+  const handlerRef = useRef(null)
+
   const [isPlaying, setIsPlaying] = useState(false)
+  // React 层的区域状态，用于渲染控制面板
+  const [regions, setRegions] = useState([]) // [{id, name, color, pointColor, visible}]
 
   // === 独立控制新增：为多船维护可变数据（不触发重渲染） ===
   const timersRef = useRef({})           // { [id]: intervalId | null }
   const indexRef = useRef({})            // { [id]: currentIndex }
-  const boatDataRef = useRef({})         // { [id]: { actualPoints, predictedPoints, entity } }
+  const boatDataRef = useRef({})         // { [id]: { actualPoints, predictedPoints, entity, hasActual } }
 
   // 存放上传的多艘船（仅用于渲染列表）
   const [boats, setBoats] = useState([])
@@ -64,8 +75,10 @@ export default function App() {
       navigationHelpButton: false,
       infoBox: false,
       selectionIndicator: false,
+      // 需要地形可加：terrainProvider: Cesium.createWorldTerrain(),
     })
     viewerRef.current = viewer
+    viewer.scene.globe.depthTestAgainstTerrain = true
 
     // 相机锁定/解锁
     const lockCameraControls = (lock) => {
@@ -118,7 +131,7 @@ export default function App() {
 
     viewer.entities.add({
       availability: new Cesium.TimeIntervalCollection([
-        new Cesium.TimeInterval({ start, stop } ),
+        new Cesium.TimeInterval({ start, stop }),
       ]),
       position: positionProperty,
       orientation: new Cesium.VelocityOrientationProperty(positionProperty),
@@ -137,7 +150,7 @@ export default function App() {
       },
     })
 
-    // 点击事件
+    // —— 你的原 LEFT_CLICK：停止自转 + 首次飞行 —— //
     let firstClick = true
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
     handler.setInputAction(() => {
@@ -158,13 +171,170 @@ export default function App() {
         })
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
+    handlerRef.current = handler
+
+    // —— 新增：多边形绘制事件（独立 handler，与上面的 LEFT_CLICK 并存） —— //
+    const drawHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
+    // 左键：打点
+    drawHandler.setInputAction((movement) => {
+      const cartesian = getClickCartesian(viewer, movement.position)
+      if (!cartesian) return
+      const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+      const lon = Cesium.Math.toDegrees(cartographic.longitude);
+      const lat = Cesium.Math.toDegrees(cartographic.latitude);
+      const h = cartographic.height || 0; 
+
+      positionsRef.current.push([lon, lat])
+
+      // 临时端点（黄点）
+      viewer.entities.add({
+        id: `temp_point_${positionsRef.current.length}`,
+        //把文字信息抬高
+        position: Cesium.Cartesian3.fromDegrees(lon, lat,h+2),
+        point: { pixelSize: 8, color: Cesium.Color.YELLOW },
+        disableDepthTestDistance: Number.POSITIVE_INFINITY, // 不被地形裁剪
+      })
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
+
+    // 右键：完成绘制
+    drawHandler.setInputAction(() => {
+      if (positionsRef.current.length < 3) {
+        alert('至少需要 3 个点来绘制多边形')
+        return
+      }
+      const id = `region_${Date.now()}`
+      const name = prompt('请输入该区域的名称', `区域 ${regions.length + 1}`) || `区域 ${regions.length + 1}`
+
+      const center = getCenterOfPositions(positionsRef.current)
+      const flat = positionsRef.current.flat()
+
+      // 区域主体（polygon + label）
+      const regionEntity = viewer.entities.add({
+        id,
+        polygon: {
+          hierarchy: Cesium.Cartesian3.fromDegreesArray(flat),
+          material: Cesium.Color.RED.withAlpha(0.4),
+          outline: true,
+          outlineColor: Cesium.Color.RED
+        },
+        label: {
+          text: name,
+          font: '16px sans-serif',
+          fillColor: Cesium.Color.BLACK,
+          showBackground: true,
+          backgroundColor: Cesium.Color.WHITE.withAlpha(0.7),
+          horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+          verticalOrigin: Cesium.VerticalOrigin.CENTER,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY, // 文字不被地形裁剪
+        },
+        position: center
+      })
+
+      // 顶点作为子实体（便于随 parent 显隐/删除）
+      positionsRef.current.forEach((p, i) => {
+        const pos = Cesium.Cartesian3.fromDegrees(p[0], p[1], 2);
+        viewer.entities.add({
+          id: `${id}_point_${i}`,
+          parent: regionEntity,
+          position: pos,
+          point: { pixelSize: 6, color: Cesium.Color.YELLOW,disableDepthTestDistance: Number.POSITIVE_INFINITY,}
+        })
+      })
+
+      // React 面板加入一条记录
+      setRegions(prev => ([
+        ...prev,
+        { id, name, color: '#ff0000', pointColor: '#ffff00', visible: true }
+      ]))
+
+      // 清理临时点 & 当前绘制缓存
+      removeTempPoints(viewer)
+      positionsRef.current = []
+    }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)
+
+    drawHandlerRef.current = drawHandler
+
+    // 默认视角
+    viewer.camera.flyHome(0)
 
     return () => {
       viewer.clock.onTick.removeEventListener(rotationHandler)
       handler.destroy()
+      drawHandler.destroy()
       viewer && !viewer.isDestroyed() && viewer.destroy()
     }
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // 只在初次挂载时运行
+
+  // ---------- 区域控制面板回调（同步 Cesium & React 状态） ----------
+
+  // 更新文字
+  const handleTextChange = (id, newText) => {
+    const viewer = viewerRef.current
+    const entity = viewer?.entities.getById(id)
+    if (entity?.label) entity.label.text = newText
+    setRegions(prev => prev.map(r => (r.id === id ? { ...r, name: newText } : r)))
+  }
+
+  // 更新区域颜色
+  const handleRegionColor = (id, hex) => {
+    const viewer = viewerRef.current
+    const entity = viewer?.entities.getById(id)
+    if (entity?.polygon) {
+      const col = Cesium.Color.fromCssColorString(hex)
+      entity.polygon.material = col.withAlpha(0.4)
+      entity.polygon.outlineColor = col
+    }
+    setRegions(prev => prev.map(r => (r.id === id ? { ...r, color: hex } : r)))
+  }
+
+  // 更新顶点颜色
+  const handlePointColor = (id, hex) => {
+    const viewer = viewerRef.current
+    const color = Cesium.Color.fromCssColorString(hex)
+    viewer?.entities.values
+      .filter(en => en.id && String(en.id).startsWith(`${id}_point_`))
+      .forEach(pt => {
+        if (pt.point) pt.point.color = color
+      })
+    setRegions(prev => prev.map(r => (r.id === id ? { ...r, pointColor: hex } : r)))
+  }
+
+  // 显示/隐藏（包含 polygon + label + 顶点）
+  const handleToggleVisible = (id, checked) => {
+    const viewer = viewerRef.current
+    const entity = viewer?.entities.getById(id)
+    if (entity) entity.show = checked
+    setRegions(prev => prev.map(r => (r.id === id ? { ...r, visible: checked } : r)))
+  }
+
+  // 删除（连带子实体：所有顶点）
+  const handleDelete = (id) => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+
+    const collection = viewer.entities
+
+    // 1) 找到该区域实体
+    const region = collection.getById(id)
+
+    // 2) 找出所有属于该区域的子实体（更稳妥：通过 parent 判断）
+    const children = collection.values.filter(
+      (e) =>
+        // 通过 parent 关系匹配
+        (e.parent && e.parent.id === id) ||
+        // 兜底：按命名约定匹配（兼容历史/外部创建的点）
+        (e.id && String(e.id).startsWith(`${id}_point_`))
+    )
+
+    // 3) 先删子实体，再删父实体
+    children.forEach((child) => collection.remove(child))
+    if (region) collection.remove(region)
+
+    // 4) 更新面板状态
+    setRegions((prev) => prev.filter((r) => r.id !== id))
+  }
+
 
   // === 工具：计算两点方位角，生成朝向四元数（供独立控制的船使用） ===
   const computeHeadingRadians = (lon1, lat1, lon2, lat2) => {
@@ -239,7 +409,7 @@ export default function App() {
     const boatEntity = viewer.entities.add({
       position: positionCallback,
       orientation: orientationCallback,
-      model: { uri: "/models/boat.glb", scale: 5, minimumPixelSize: 50 },
+      model: { uri: '/models/boat.glb', scale: 5, minimumPixelSize: 50 },
       // 不使用 entity.path（它依赖全局时间），改为静态 polyline 在下面绘制
     })
 
@@ -323,7 +493,7 @@ export default function App() {
     viewerRef.current?.scene.requestRender?.()
   }
 
-  // —— 以下为你原来的“演示船控制”，保持不变（它仍然控制全局 clock） ——
+  // —— 以下为你原来的“演示船控制”，保持不变（它仍然控制全局 clock） —— //
   const handleStart = () => {
     viewerRef.current.clock.shouldAnimate = true
     setIsPlaying(true)
@@ -344,15 +514,112 @@ export default function App() {
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
 
       {/* 上传按钮（保留） */}
-      <div style={{ position: 'absolute', top: 20, left: 20, background: '#fff', padding: 8 }}>
+      <div style={{ position: 'absolute', top: 20, left: 20, background: '#fff', padding: 8, borderRadius: 8 }}>
         <input type="file" accept=".csv" onChange={handleFileUpload} />
+      </div>
+
+      {/* 区域管理面板（新） */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 20,
+          right: 20,
+          width: 280,
+          maxHeight: '70vh',
+          overflow: 'auto',
+          background: '#ffffff',
+          borderRadius: 12,
+          boxShadow: '0 6px 16px rgba(0,0,0,0.15)',
+          padding: 12,
+          fontFamily: 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+          fontSize: 14,
+        }}
+      >
+        <h3 style={{ margin: '4px 0 12px' }}>区域管理</h3>
+        {regions.length === 0 && (
+          <div style={{ color: '#666', lineHeight: 1.6 }}>
+            左键打点，右键结束绘制；完成后这里会出现可编辑的卡片。
+          </div>
+        )}
+        {regions.map((r) => (
+          <div
+            key={r.id}
+            style={{
+              border: '1px solid #eee',
+              borderRadius: 10,
+              padding: 10,
+              marginBottom: 10,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>{r.name}</div>
+
+            <div style={{ display: 'grid', gap: 8 }}>
+              <label style={{ display: 'grid', gap: 6 }}>
+                <span>文字</span>
+                <input
+                  value={r.name}
+                  onChange={(e) => handleTextChange(r.id, e.target.value)}
+                  style={{
+                    padding: '6px 8px',
+                    border: '1px solid #ddd',
+                    borderRadius: 8,
+                  }}
+                />
+              </label>
+
+              <label style={{ display: 'grid', gap: 6 }}>
+                <span>区域颜色</span>
+                <input
+                  type="color"
+                  value={r.color}
+                  onChange={(e) => handleRegionColor(r.id, e.target.value)}
+                  style={{ width: 48, height: 32, padding: 0, border: 'none' }}
+                />
+              </label>
+
+              <label style={{ display: 'grid', gap: 6 }}>
+                <span>顶点颜色</span>
+                <input
+                  type="color"
+                  value={r.pointColor}
+                  onChange={(e) => handlePointColor(r.id, e.target.value)}
+                  style={{ width: 48, height: 32, padding: 0, border: 'none' }}
+                />
+              </label>
+
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={r.visible}
+                  onChange={(e) => handleToggleVisible(r.id, e.target.checked)}
+                />
+                可见
+              </label>
+
+              <button
+                onClick={() => handleDelete(r.id)}
+                style={{
+                  marginTop: 4,
+                  padding: '6px 10px',
+                  background: '#ff4d4f',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                }}
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* 原始船控制面板（保留） */}
       <div style={{
         position: 'absolute',
         top: 200,
-        right: 260,
+        right: 300,
         background: 'rgba(0,0,0,0.5)',
         padding: '12px 16px',
         borderRadius: 8,
@@ -388,4 +655,35 @@ export default function App() {
       </div>
     </div>
   )
+}
+
+/* ----------------- 工具函数 ----------------- */
+
+// 点击处获取 Cartesian3（优先 pickPosition，回退到 ellipsoid 相交）
+function getClickCartesian(viewer, windowPosition) {
+  const scene = viewer.scene
+  // a) 3D 瓦片/模型/地形上拾取
+  if (scene.pickPositionSupported) {
+    const cartesian = scene.pickPosition(windowPosition)
+    if (Cesium.defined(cartesian)) return cartesian
+  }
+  // b) 回退：从摄像头射线与椭球求交
+  const ray = viewer.camera.getPickRay(windowPosition)
+  const cartesian = scene.globe.pick(ray, scene)
+  return cartesian || null
+}
+
+// 计算多边形（经纬度数组）中心
+function getCenterOfPositions(lonlatArr) {
+  const pts = lonlatArr.map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat))
+  const bs = Cesium.BoundingSphere.fromPoints(pts)
+  return bs.center
+}
+
+// 移除临时端点
+function removeTempPoints(viewer) {
+  const toRemove = viewer.entities.values.filter(
+    (e) => e.id && String(e.id).startsWith('temp_point_')
+  )
+  toRemove.forEach((e) => viewer.entities.remove(e))
 }
