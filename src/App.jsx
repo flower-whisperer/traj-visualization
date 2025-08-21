@@ -21,7 +21,7 @@ export default function App() {
   // 存几何不引发重渲染
   const regionGeomRef = useRef({})      // { [regionId]: [{lon,lat}, ...] }
 
-  // 告警日志
+  // 警告日志
   const [alerts, setAlerts] = useState([]) // [{id, boatId, regionId, regionName, time}]
 
   // === 多船可变数据（不触发重渲染） ===
@@ -376,7 +376,7 @@ export default function App() {
       return Cesium.Math.clamp(3 + Math.log10(h) * 2.2, 3, 14)
     }, false)
 
-  // === 核心：创建独立渔船 + 动态轨迹 + 告警叠加 ===
+  // === 核心：创建独立渔船 + 动态轨迹 + 警告叠加 ===
   const createIndependentBoat = (actualPoints, predictedPoints) => {
     const viewer = viewerRef.current
     if (!viewer) return
@@ -506,7 +506,7 @@ export default function App() {
       }
     })
 
-    // —— 告警标识（默认隐藏），绑定同一位置，屏幕右上偏移 —— //
+    // —— 警告标识（默认隐藏），绑定同一位置，屏幕右上偏移 —— //
     const overlayId = `${id}_alert`
     viewer.entities.add({
       id: overlayId,
@@ -538,7 +538,7 @@ export default function App() {
     setIsPlayingMap(prev => ({ ...prev, [id]: false }))
   }
 
-  // === 多船独立控制 + 告警检测 + 预测显现 ===
+  // === 多船独立控制 + 警告检测 + 预测显现 ===
   const startBoat = (id) => {
     const viewer = viewerRef.current
     const data = boatDataRef.current[id]
@@ -550,7 +550,7 @@ export default function App() {
       const path = data.actualPoints
       const idx = indexRef.current[id] ?? 0
 
-      // —— 告警检测（使用“当前点”）——
+      // —— 警告检测（使用“当前点”）——
       const curr = path[Math.min(idx, path.length - 1)]
       if (curr) detectBoatInRestrictedZones(id, curr.lon, curr.lat)
 
@@ -613,7 +613,7 @@ export default function App() {
     setIsPlaying(false)
   }
 
-  // =================== 告警逻辑 ===================
+  // =================== 警告逻辑 ===================
 
   const setBoatOverlayVisible = (boatId, visible) => {
     const viewer = viewerRef.current
@@ -798,7 +798,7 @@ export default function App() {
                         checked={!!r.restricted}
                         onChange={(e) => handleToggleRestricted(r.id, e.target.checked)}
                       />
-                      禁渔区（触发告警）
+                      禁渔区（触发警告）
                     </label>
 
                     <button
@@ -846,12 +846,12 @@ export default function App() {
               </div>
             </Section>
 
-            <Section title="告警日志" openKey="alerts">
+            <Section title="警告日志" openKey="alerts">
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
                 <button onClick={() => setAlerts([])} style={btnStyle}>清空</button>
               </div>
               {alerts.length === 0 ? (
-                <div style={{ color: '#b9e6ff' }}>暂无告警</div>
+                <div style={{ color: '#b9e6ff' }}>暂无警告</div>
               ) : (
                 alerts.map(a => (
                   <div key={a.id} style={{ padding: '6px 8px', borderBottom: '1px dashed rgba(255,255,255,0.2)', lineHeight: 1.5 }}>
