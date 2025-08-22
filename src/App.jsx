@@ -37,6 +37,11 @@ export default function App() {
   // 右侧控制台（海洋风）折叠
   const [dockOpen, setDockOpen] = useState(true)
   const [secOpen, setSecOpen] = useState({ regions: true, boats: true, demo: false, alerts: true })
+  const [boatPredState, setBoatPredState] = useState({}) 
+  // { [id]: { predUnlocked:false, predReady:false, isLoadingPred:false } }
+
+  const TRACK_HEIGHT = 8 // 米
+
 
   // 原来的模拟轨迹（演示船）
   const gpsPoints = [
@@ -73,8 +78,12 @@ export default function App() {
       selectionIndicator: false,
       // terrainProvider: Cesium.createWorldTerrain(),
     })
+    
     viewerRef.current = viewer
     viewer.scene.globe.depthTestAgainstTerrain = true
+
+    
+  
 
     // FXAA + Bloom（增强亮度/发光）
     viewer.scene.postProcessStages.fxaa.enabled = true
@@ -131,7 +140,7 @@ export default function App() {
 
     gpsPoints.forEach((pt, i) => {
       const time = Cesium.JulianDate.addSeconds(start, i * 5, new Cesium.JulianDate())
-      const pos = Cesium.Cartesian3.fromDegrees(pt.lon, pt.lat, 0)
+      const pos = Cesium.Cartesian3.fromDegrees(pt.lon, pt.lat, TRACK_HEIGHT)
       positionProperty.addSample(time, pos)
     })
 
@@ -170,17 +179,20 @@ export default function App() {
       if (firstClick) {
         firstClick = false
         viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(123.0, 30.0, 200000),
-          orientation: {
-            heading: 0,
-            pitch: Cesium.Math.toRadians(-60),
-            roll: 0,
-          },
-          duration: 3,
-          complete: () => {
-            lockCameraControls(false)
-          }
-        })
+        destination: Cesium.Cartesian3.fromDegrees(123.0, 30.0, 200000),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch: Cesium.Math.toRadians(-60),
+          roll: 0,
+        },
+        duration: 4.0, // 飞行shijian
+        maximumHeight: 5000000, // ⬅ 飞行时最高抬到5000km，增加弧形轨迹
+        easingFunction: Cesium.EasingFunction.QUADRATIC_OUT, // ⬅ 二次缓出，柔和着陆
+        complete: () => {
+          lockCameraControls(false)
+        }
+      })
+
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
     handlerRef.current = handler
@@ -264,7 +276,92 @@ export default function App() {
     }, Cesium.ScreenSpaceEventType.RIGHT_CLICK)
 
     drawHandlerRef.current = drawHandler
+       /* ========= 新增：鼠标十字虚线 & 经纬度显示 ========= */
+    let crossLonLine = viewer.entities.add({
+      polyline: {
+        positions: [],
+        width: 1.5,
+        material: new Cesium.PolylineDashMaterialProperty({
+          color: Cesium.Color.YELLOW.withAlpha(0.6),
+          dashLength: 16
+        }),
+        clampToGround: true
+      },
+      show: false
+    })
 
+    let crossLatLine = viewer.entities.add({
+      polyline: {
+        positions: [],
+        width: 1.5,
+        material: new Cesium.PolylineDashMaterialProperty({
+          color: Cesium.Color.YELLOW.withAlpha(0.6),
+          dashLength: 16
+        }),
+        clampToGround: true
+      },
+      show: false
+    })
+
+    let crossLabel = viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(0, 0),
+      label: {
+        text: "",
+        font: "bold 14px sans-serif",
+        fillColor: Cesium.Color.WHITE,
+        showBackground: true,
+        backgroundColor: Cesium.Color.BLACK.withAlpha(0.5),
+        pixelOffset: new Cesium.Cartesian2(0, -20),
+        verticalOrigin: Cesium.VerticalOrigin.TOP,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY
+      },
+      show: false
+    })
+
+    const moveHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
+    moveHandler.setInputAction((movement) => {
+    const viewer = viewerRef.current
+    if (!viewer) return
+
+    const camHeight = viewer.camera.positionCartographic.height
+    const showCross = camHeight < 1_000_000 // 低于 100km 才显示
+
+    const cartesian = getClickCartesian(viewer, movement.endPosition)
+    if (!cartesian || !showCross) {
+      crossLonLine.show = false
+      crossLatLine.show = false
+      crossLabel.show = false
+      return
+    }
+
+    const carto = Cesium.Cartographic.fromCartesian(cartesian)
+    const lon = Cesium.Math.toDegrees(carto.longitude)
+    const lat = Cesium.Math.toDegrees(carto.latitude)
+
+    // ===== 避免 DeveloperError 的安全最小跨度 =====
+    //不画十字了，老是报错
+
+    
+
+    // 经纬度 label
+      // 经纬度 label（带 W/E N/S）
+    const lonAbs = Math.abs(lon).toFixed(6)
+    const latAbs = Math.abs(lat).toFixed(6)
+    const lonDir = lon >= 0 ? 'E' : 'W'
+    const latDir = lat >= 0 ? 'N' : 'S'
+    crossLabel.position = Cesium.Cartesian3.fromDegrees(lon, lat)
+    crossLabel.label.text = `${latAbs}°${latDir}, ${lonAbs}°${lonDir}`
+
+
+    // 显示
+    crossLonLine.show = true
+    crossLatLine.show = true
+    crossLabel.show = true
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
+
+
+    // 保存，方便卸载
+    viewer.crossMoveHandler = moveHandler
     // 默认视角
     viewer.camera.flyHome(0)
 
@@ -272,6 +369,8 @@ export default function App() {
       viewer.clock.onTick.removeEventListener(rotationHandler)
       handler.destroy()
       drawHandler.destroy()
+      viewer.crossMoveHandler && viewer.crossMoveHandler.destroy()
+
       viewer && !viewer.isDestroyed() && viewer.destroy()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -362,8 +461,10 @@ export default function App() {
           if (type === 0) actualPoints.push({ lon, lat })
           else if (type === 1) predictPoints.push({ lon, lat })
         })
+        const name = prompt('请输入该渔船的船名或ID', `渔船 ${boats.length + 1}`) || `渔船 ${boats.length + 1}`
+        createIndependentBoat(actualPoints, predictPoints, name)
 
-        createIndependentBoat(actualPoints, predictPoints)
+
       }
     })
   }
@@ -377,7 +478,7 @@ export default function App() {
     }, false)
 
   // === 核心：创建独立渔船 + 动态轨迹 + 警告叠加 ===
-  const createIndependentBoat = (actualPoints, predictedPoints) => {
+  const createIndependentBoat = (actualPoints, predictedPoints, displayName) => {
     const viewer = viewerRef.current
     if (!viewer) return
 
@@ -414,6 +515,22 @@ export default function App() {
         silhouetteSize: 2.5
       },
     })
+    viewer.entities.add({
+      id: `${id}_nameLabel`,
+      parent: boatEntity,
+      position: positionCallback, // 跟随船移动
+      label: {
+        text: displayName,
+        font: 'bold 14px sans-serif',
+        fillColor: Cesium.Color.WHITE,
+        showBackground: true,
+        backgroundColor: Cesium.Color.GREEN.withAlpha(0.6),
+        pixelOffset: new Cesium.Cartesian2(-20, -20), // 🚩左上角偏移，具体调节
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        horizontalOrigin: Cesium.HorizontalOrigin.RIGHT,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY
+      }
+    })
 
     // —— 船头发光“脉冲”点（增强动态感） —— //
     const pulseColor = new Cesium.CallbackProperty(() => {
@@ -441,7 +558,7 @@ export default function App() {
     const actualPosProp = new Cesium.CallbackProperty(() => {
       const idx = indexRef.current[id] ?? 0
       const take = Math.max(2, Math.min(idx + 1, actualPoints.length))
-      return actualPoints.slice(0, take).map(p => Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0))
+      return actualPoints.slice(0, take).map(p => Cesium.Cartesian3.fromDegrees(p.lon, p.lat, TRACK_HEIGHT))
     }, false)
 
     viewer.entities.add({
@@ -475,36 +592,30 @@ export default function App() {
     }
 
     const predWidthOuter = makeWidthProperty()
-    const predWidthInner = new Cesium.CallbackProperty(() => Math.max(2, predWidthOuter.getValue() - 2), false)
+    
 
     const predPosProp = new Cesium.CallbackProperty(() => {
       const bd = boatDataRef.current[id]
       const n = Math.max(0, Math.min(bd.predIndex, (bd.predictedPoints || []).length))
       if (!n) return []
-      return bd.predictedPoints.slice(0, n).map(p => Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0))
+      return bd.predictedPoints.slice(0, n).map(p => Cesium.Cartesian3.fromDegrees(p.lon, p.lat, TRACK_HEIGHT))
     }, false)
 
-    // viewer.entities.add({
-    //   id: `${id}_pred_outer`,
-    //   polyline: {
-    //     positions: predPosProp,
-    //     width: predWidthOuter,
-    //     // 用虚线做“流动感”暗示（无需自定义材质）
-    //     material: new Cesium.PolylineDashMaterialProperty({
-    //       color: Cesium.Color.fromCssColorString('#ff6b6b').withAlpha(0.95),
-    //       gapColor: Cesium.Color.fromCssColorString('#ff6b6b').withAlpha(0.25),
-    //       dashLength: 20
-    //     })
-    //   }
-    // })
     viewer.entities.add({
-      id: `${id}_pred_inner`,
+      id: `${id}_pred_line`,
       polyline: {
         positions: predPosProp,
-        width: predWidthInner,
-        material: Cesium.Color.WHITE.withAlpha(0.95)
+        width: predWidthOuter,
+        material: new Cesium.PolylineDashMaterialProperty({
+          color: Cesium.Color.fromCssColorString('#ff4d4d').withAlpha(0.9), // 虚线主色
+          gapColor: Cesium.Color.fromCssColorString('#ff4d4d').withAlpha(0.15), // 虚线间隙淡色
+          dashLength: 10, // 虚线段长度
+          dashPattern: 0xF0F0 // 虚线模式，16位bit表示
+        }),
+        clampToGround: false
       }
     })
+
 
     // —— 警告标识（默认隐藏），绑定同一位置，屏幕右上偏移 —— //
     const overlayId = `${id}_alert`
@@ -534,8 +645,15 @@ export default function App() {
     })
 
     // 渲染列表用
-    setBoats(prev => [...prev, { id }])
+
+
+    // 保存
+    setBoats(prev => [...prev, { id, name: displayName }])
     setIsPlayingMap(prev => ({ ...prev, [id]: false }))
+    setBoatPredState(prev => ({
+      ...prev,
+      [id]: { predUnlocked:false, predReady:false, isLoadingPred:false }
+  }))
   }
 
   // === 多船独立控制 + 警告检测 + 预测显现 ===
@@ -549,16 +667,29 @@ export default function App() {
     timersRef.current[id] = setInterval(() => {
       const path = data.actualPoints
       const idx = indexRef.current[id] ?? 0
+      // 当走到第 30 个点时暂停
+      if (!boatPredState[id]?.predReady && idx >= 29) {
+        // 先更新按钮状态
+        setBoatPredState(prev => ({
+          ...prev,
+          [id]: { ...(prev[id] || {}), predUnlocked: true }
+        }))
+
+        // 再暂停播放
+        pauseBoat(id)
+        return
+      }
 
       // —— 警告检测（使用“当前点”）——
       const curr = path[Math.min(idx, path.length - 1)]
       if (curr) detectBoatInRestrictedZones(id, curr.lon, curr.lat)
 
       // —— 到达“分叉点”后启动预测轨迹的逐段显现 —— //
-      if (idx >= path.length - 1 && (data.predictedPoints?.length || 0) > 1) {
-        if (!data.predActive) data.predActive = true
-        data.predIndex = Math.min(data.predIndex + 1, data.predictedPoints.length)
-      }
+      if (boatPredState[id]?.predReady && (data.predictedPoints?.length || 0) > 1) {
+      if (!data.predActive) data.predActive = true
+      data.predIndex = Math.min(data.predIndex + 1, data.predictedPoints.length)
+    }
+
 
       // 推进播放
       if (idx < path.length - 1) {
@@ -698,6 +829,41 @@ export default function App() {
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+      {/* 左上角项目名 */}
+        <div style={{
+          position: 'absolute',
+          top: 20,
+          left: 20,
+          zIndex: 1000,
+          padding: '10px 16px',
+          borderRadius: 8,
+          background: 'linear-gradient(135deg, rgba(0,0,0,0.55), rgba(40,40,40,0.35))',
+          border: '1px solid rgba(255,255,255,0.25)',
+          backdropFilter: 'blur(6px)',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+          lineHeight: 1.2,
+          fontFamily: 'Segoe UI, Roboto, sans-serif'
+        }}>
+          <div style={{ 
+            fontSize: 20,
+            fontWeight: 700,
+            color: 'rgba(255,255,255,0.7)', // 浅灰
+            letterSpacing: '1px',
+            textShadow: '0 1px 2px rgba(0,0,0,0.8)'
+          }}>
+            HUAWEI CUP
+          </div>
+          <div style={{
+            fontSize: 24,
+            fontWeight: 800,
+            color: '#ffffff',
+            marginTop: 4,
+            textShadow: '0 1px 3px rgba(0,0,0,0.9)'
+          }}>
+            渔航智轨
+          </div>
+</div>
+
 
       {/* 右侧海洋风控制台（可折叠 + 分组） */}
       <div
@@ -827,14 +993,54 @@ export default function App() {
                   style={{ width: '100%', padding: 8, borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: '#e8fbff' }} />
               </div>
               {boats.length === 0 ? (
-                <div style={{ color: '#b9e6ff' }}>尚未上传渔船 CSV（lat, lon, type[0实际/1预测]）。</div>
+                <div style={{ color: '#b9e6ff' }}>尚未上传渔船 CSV</div>
               ) : boats.map(boat => (
                 <div key={boat.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.2)', paddingBottom: 8, marginBottom: 8 }}>
-                  <div style={{ marginBottom: 8, opacity: .9 }}>船ID: {boat.id}</div>
+                  <div style={{ marginBottom: 8, opacity: .9 }}>
+                    {boat.name} <span style={{ fontSize: 12, opacity: 0.6 }}>({boat.id})</span>
+                  </div>
                   <button onClick={() => startBoat(boat.id)} disabled={isPlayingMap[boat.id]} style={btnStyle}>开始</button>
                   <button onClick={() => pauseBoat(boat.id)} disabled={!isPlayingMap[boat.id]} style={btnStyle}>暂停</button>
                   <button onClick={() => resetBoat(boat.id)} style={btnStyle}>重置</button>
+                      <button
+                      onClick={() => {
+                        setBoatPredState(prev => ({
+                          ...prev,
+                          [boat.id]: { ...(prev[boat.id]||{}), isLoadingPred:true }
+                        }))
+                        setTimeout(() => {
+                          // 设置预测解锁 & 开启预测绘制
+                          setBoatPredState(prev => ({
+                            ...prev,
+                            [boat.id]: { ...(prev[boat.id]||{}), predReady:true, isLoadingPred:false }
+                          }))
+                          // 修改船数据状态
+                          const bd = boatDataRef.current[boat.id]
+                          if (bd) bd.predActive = true
+                          // 自动恢复播放
+                          startBoat(boat.id)
+                        }, 1000)
+                      }}
+                      disabled={!boatPredState[boat.id]?.predUnlocked || boatPredState[boat.id]?.predReady}
+                      style={{
+                        ...btnStyle,
+                        background: boatPredState[boat.id]?.predReady 
+                          ? 'linear-gradient(90deg, #4caf50, #2e7d32)' // 绿色已预测
+                          : btnStyle.background,
+                        opacity: !boatPredState[boat.id]?.predUnlocked ? 0.5 : 1,
+                        cursor: !boatPredState[boat.id]?.predUnlocked ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      {boatPredState[boat.id]?.isLoadingPred 
+                        ? '预测中' 
+                        : boatPredState[boat.id]?.predReady 
+                          ? '已预测' 
+                          : '预测'}
+                    </button>
+                   
+
                 </div>
+                
               ))}
             </Section>
 
@@ -875,7 +1081,8 @@ const btnStyle = {
   color: '#fff',
   border: 'none',
   borderRadius: 8,
-  cursor: 'pointer'
+  cursor: 'pointer',
+  marginLeft:16
 }
 
 /* ----------------- 工具函数 ----------------- */
