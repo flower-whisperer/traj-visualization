@@ -65,7 +65,7 @@ export default function App() {
     5: '#2ec4b6',
     6: '#ff9f1c',
     7: '#ff4d4d',
-    8:'#aabbcc'
+    8:'#92d806'
   }
   const LEGEND_MAP = {
   0: "Ground Truth",
@@ -74,9 +74,9 @@ export default function App() {
   3: "TrAISformer",
   4: "LSTM",
   5: "ST-Seq2Seq",
-  6: "TRFM-FS",
+  6: "VeTraNet",
   7: "METO-S2S",
-  8: "VeTraNet"
+  8: "TRFM-FS"
 }
 // —— 24h 警告趋势图 —— //
 const trendDivRef = useRef(null)
@@ -455,14 +455,14 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
         if (!rows.length) return
 
         const actualPoints = []
-        const altTracks = {1:[],2:[],3:[],4:[],5:[],6:[],7:[]}
+        const altTracks = {1:[],2:[],3:[],4:[],5:[],6:[],7:[],8:[]}
 
         rows.forEach(r => {
           const lat = parseFloat(r[0])
           const lon = parseFloat(r[1])
           const type = parseInt(r[2], 10)
           if (type === 0) actualPoints.push({ lon, lat })
-          else if (type >= 1 && type <= 7) altTracks[type].push({ lon, lat })
+          else if (type >= 1 && type <= 8) altTracks[type].push({ lon, lat })
         })
 
         const name = prompt('请输入该渔船的船名或ID', `渔船 ${boats.length + 1}`) || `渔船 ${boats.length + 1}`
@@ -486,7 +486,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
     const hasActual = actualPoints.length > 0
     const firstPoint =
       hasActual ? actualPoints[0]
-               : (altTracks[7]?.[0] || altTracks[1]?.[0] || null)
+               : (altTracks[8]?.[0] || altTracks[1]?.[0] || null)
     if (!firstPoint) return
 
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -496,7 +496,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
     // 船位置（跟随实际轨迹）
     const positionCallback = new Cesium.CallbackProperty(() => {
       const idx = indexRef.current[id] ?? 0
-      const p = (hasActual ? actualPoints : (altTracks[7]?.length ? altTracks[7] : altTracks[1]))[idx] || firstPoint
+      const p = (hasActual ? actualPoints : (altTracks[8]?.length ? altTracks[8] : altTracks[1]))[idx] || firstPoint
       return Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0)
     }, false)
 
@@ -587,9 +587,9 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
 
     // —— 分支 1..7：虚线 + 各自颜色（预测解锁后逐段显现） —— //
     const altState = {}
-    for (let t = 1; t <= 7; t++) altState[t] = { active: false, index: 0 }
+    for (let t = 1; t <= 8; t++) altState[t] = { active: false, index: 0 }
 
-    for (let t = 1; t <= 7; t++) {
+    for (let t = 1; t <= 8; t++) {
       const track = altTracks[t] || []
       const posProp = new Cesium.CallbackProperty(() => {
         const st = altState[t]
@@ -603,7 +603,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
         id: `${id}_alt_${t}`,
         polyline: {
           positions: posProp,
-          width: 6,
+          width: 8,
           material: Cesium.Color.fromCssColorString(ALT_COLOR_MAP[t]).withAlpha(0.95),
           clampToGround: false
         }
@@ -669,7 +669,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
 
       // 预测（分支 1..7）逐段显现
       if (boatPredState[id]?.predReady) {
-        for (let t = 1; t <= 7; t++) {
+        for (let t = 1; t <= 8; t++) {
           const track = data.altTracks[t] || []
           const st = data.altState[t]
           if (track.length > 1) {
@@ -685,7 +685,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
       } else {
         // 实际轨迹结束，等待分支全部显现完成
         const allAltDone = (() => {
-          for (let t = 1; t <= 7; t++) {
+          for (let t = 1; t <= 8; t++) {
             const track = data.altTracks[t] || []
             const st = data.altState[t]
             if (track.length > 1 && st.index < track.length) return false
@@ -719,7 +719,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
     indexRef.current[id] = 0
     const bd = boatDataRef.current[id]
     if (bd) {
-      for (let t = 1; t <= 7; t++) {
+      for (let t = 1; t <= 8; t++) {
         bd.altState[t].index = 0
         bd.altState[t].active = false
       }
@@ -1005,7 +1005,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
                         setBoatPredState(prev => ({ ...prev, [boat.id]: { ...(prev[boat.id]||{}), predUnlocked:true, predReady:true, isLoadingPred:false } }))
                         // 激活所有分支并自动播放
                         const bd = boatDataRef.current[boat.id]
-                        if (bd) { for (let t = 1; t <= 7; t++) bd.altState[t].active = true }
+                        if (bd) { for (let t = 1; t <= 8; t++) bd.altState[t].active = true }
                         startBoat(boat.id)
                       }, 1000)
                     }}
