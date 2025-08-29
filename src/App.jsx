@@ -69,14 +69,14 @@ export default function App() {
   }
   const LEGEND_MAP = {
   0: "Ground Truth",
-  1: "ARIMA",
-  2: "MLP",
-  3: "TrAISformer",
-  4: "LSTM",
-  5: "ST-Seq2Seq",
-  6: "VeTraNet",
-  7: "METO-S2S",
-  8: "TRFM-FS"
+  1: "Predict",
+  // 2: "MLP",
+  // 3: "TrAISformer",
+  // 4: "LSTM",
+  // 5: "ST-Seq2Seq",
+  // 6: "VeTraNet",
+  // 7: "METO-S2S",
+  // 8: "TRFM-FS"
 }
 // —— 24h 警告趋势图 —— //
 const trendDivRef = useRef(null)
@@ -451,22 +451,37 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
 
     Papa.parse(file, {
       complete: (result) => {
+        console.log("upload");
+        
         const rows = result.data.filter(r => r.length >= 3 && !isNaN(parseFloat(r[0])) && !isNaN(parseFloat(r[1])))
+        console.log(rows.length);
         if (!rows.length) return
-
+        
         const actualPoints = []
-        const altTracks = {1:[],2:[],3:[],4:[],5:[],6:[],7:[],8:[]}
+        const altTracks = {}           // 动态：只存出现过的预测类型
+        const altTypesSet = new Set()  // 记录出现过的预测类型编号（非 0）
+
 
         rows.forEach(r => {
-          const lat = parseFloat(r[0])
-          const lon = parseFloat(r[1])
-          const type = parseInt(r[2], 10)
-          if (type === 0) actualPoints.push({ lon, lat })
-          else if (type >= 1 && type <= 8) altTracks[type].push({ lon, lat })
+           const lat = parseFloat(r[0])
+           const lon = parseFloat(r[1])
+           // 第三列可能是 "6" 或 "similar6" 或 "similar 6" 等，统一抽取数字
+           const raw = String(r[2] ?? '').trim()
+           const m = raw.match(/\d+/)
+           if (!isNaN(lat) && !isNaN(lon) && m) {
+             const type = parseInt(m[0], 10)
+             if (type === 0) {
+               actualPoints.push({ lon, lat })
+             } else {
+               if (!altTracks[type]) altTracks[type] = []
+               altTracks[type].push({ lon, lat })
+               altTypesSet.add(type)
+             }
+           }
         })
 
         const name = prompt('请输入该渔船的船名或ID', `渔船 ${boats.length + 1}`) || `渔船 ${boats.length + 1}`
-        createIndependentBoat(actualPoints, altTracks, name)
+        createIndependentBoat(actualPoints, altTracks, name, Array.from(altTypesSet).sort((a,b)=>a-b))
       }
     })
   }
@@ -479,14 +494,15 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
     }, false)
 
   // === 创建独立渔船（实际 + 多分支） ===
-  const createIndependentBoat = (actualPoints, altTracks, displayName) => {
+  const createIndependentBoat = (actualPoints, altTracks, displayName, altTypes = []) => {
     const viewer = viewerRef.current
     if (!viewer) return
 
     const hasActual = actualPoints.length > 0
+    const firstPredType = altTypes[0]
     const firstPoint =
       hasActual ? actualPoints[0]
-               : (altTracks[8]?.[0] || altTracks[1]?.[0] || null)
+              : (firstPredType && altTracks[firstPredType]?.[0]) || null
     if (!firstPoint) return
 
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -496,6 +512,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
     // 船位置（跟随实际轨迹）
     const positionCallback = new Cesium.CallbackProperty(() => {
       const idx = indexRef.current[id] ?? 0
+      
       const p = (hasActual ? actualPoints : (altTracks[8]?.length ? altTracks[8] : altTracks[1]))[idx] || firstPoint
       return Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 0)
     }, false)
@@ -584,12 +601,11 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
         }
       })
     }
-
-    // —— 分支 1..7：虚线 + 各自颜色（预测解锁后逐段显现） —— //
-    const altState = {}
-    for (let t = 1; t <= 8; t++) altState[t] = { active: false, index: 0 }
-
-    for (let t = 1; t <= 8; t++) {
+     // —— 预测分支：仅对存在的类型建状态与实体 —— //
+      const altState = {}
+      altTypes.forEach(t => (altState[t] = { active: false, index: 0 }))
+      
+      for (const t of altTypes) {
       const track = altTracks[t] || []
       const posProp = new Cesium.CallbackProperty(() => {
         const st = altState[t]
@@ -637,8 +653,10 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
       duration: 1.6
     })
 
-    // 保存
-    boatDataRef.current[id] = { actualPoints, altTracks, altState, entity: boatEntity, hasActual }
+    
+    // 保存（新增 phase 字段：'actual' | 'pred'）
+    boatDataRef.current[id] = { actualPoints, altTracks, altState, altTypes,entity: boatEntity, hasActual, phase: 'actual' }
+   
     setBoats(prev => [...prev, { id, name: displayName }])
     setIsPlayingMap(prev => ({ ...prev, [id]: false }))
     setBoatPredState(prev => ({ ...prev, [id]: { predUnlocked:false, predReady:false, isLoadingPred:false } }))
@@ -649,38 +667,64 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
     const viewer = viewerRef.current
     const data = boatDataRef.current[id]
     if (!viewer || !data) return
-    if (!data.hasActual) return
+   
     if (timersRef.current[id]) return
 
     timersRef.current[id] = setInterval(() => {
-      const path = data.actualPoints
-      const idx = indexRef.current[id] ?? 0
-
+       const hasActual = !!data.hasActual
+       const path = data.actualPoints || []
+       const idx = indexRef.current[id] ?? 0
+       
+       
+       // —— 阶段1：预测阶段（仅逐段显现分支，不移动船、不绘制真实尾迹）——
+       if (boatPredState[id]?.predReady && data.phase === 'pred') {
+         // 逐段推进所有已激活的分支
+          for (const t of (data.altTypes || [])) {
+           const track = data.altTracks[t] || []
+           const st = data.altState[t]
+           if (track.length > 1) {
+             if (!st.active) st.active = true
+             st.index = Math.min(st.index + 1, track.length)
+           }
+         }
+         // 判断分支是否全部显现完成
+           const allAltDone = (() => {
+             for (const t of (data.altTypes || [])) {
+               const track = data.altTracks[t] || []
+               const st = data.altState[t]
+               if (track.length > 1 && st.index < track.length) return false
+             }
+             return true
+           })()
+          if (allAltDone) {
+            if (hasActual) {
+              // 有真实轨迹 → 切换到 actual 阶段
+              data.phase = 'actual'
+            } else {
+              // 只有预测 → 直接结束
+              clearInterval(timersRef.current[id])
+              timersRef.current[id] = null
+              setIsPlayingMap(prev => ({ ...prev, [id]: false }))
+            }
+          }
+         viewer.scene.requestRender?.()
+         return // 本 tick 结束，不推进真实轨迹
+       }
       // 第 30 个点解锁预测
-      if (!boatPredState[id]?.predReady && idx >= 29) {
+      if (hasActual && !boatPredState[id]?.predReady && idx >= 29) {
         setBoatPredState(prev => ({ ...prev, [id]: { ...(prev[id]||{}), predUnlocked: true } }))
         pauseBoat(id)
         return
       }
 
-      // 警告检测
-      const curr = path[Math.min(idx, path.length - 1)]
-      if (curr) detectBoatInRestrictedZones(id, curr.lon, curr.lat)
+       // 告警检测（仅当有真实轨迹时）
+       if (hasActual) {
+         const curr = path[Math.min(idx, path.length - 1)]
+         if (curr) detectBoatInRestrictedZones(id, curr.lon, curr.lat)
+       }      
 
-      // 预测（分支 1..7）逐段显现
-      if (boatPredState[id]?.predReady) {
-        for (let t = 1; t <= 8; t++) {
-          const track = data.altTracks[t] || []
-          const st = data.altState[t]
-          if (track.length > 1) {
-            if (!st.active) st.active = true
-            st.index = Math.min(st.index + 1, track.length)
-          }
-        }
-      }
-
-      // 推进实际轨迹
-      if (idx < path.length - 1) {
+      //—— 阶段2：真实轨迹推进（含尾迹、模型移动）——
+      if (hasActual && idx < path.length - 1) {
         indexRef.current[id] = idx + 1
       } else {
         // 实际轨迹结束，等待分支全部显现完成
@@ -717,18 +761,67 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
   const resetBoat = (id) => {
     pauseBoat(id)
     indexRef.current[id] = 0
+    bd.phase = 'actual'
     const bd = boatDataRef.current[id]
     if (bd) {
-      for (let t = 1; t <= 8; t++) {
-        bd.altState[t].index = 0
-        bd.altState[t].active = false
-      }
+       for (const t of (bd.altTypes || [])) {
+         bd.altState[t].index = 0
+         bd.altState[t].active = false
+       }
     }
+    if (!isPlayingMap[bd]) startBoat(bd)
     setBoatOverlayVisible(id, false)
     boatAlertRef.current[id]?.inside.clear()
     setBoatPredState(prev => ({ ...prev, [id]: { predUnlocked:false, predReady:false, isLoadingPred:false } }))
     viewerRef.current?.scene.requestRender?.()
   }
+   const deleteBoat = (id) => {
+     const viewer = viewerRef.current
+     if (!viewer) return
+
+     // 停止计时器
+     if (timersRef.current[id]) {
+       clearInterval(timersRef.current[id])
+       delete timersRef.current[id]
+     }
+     // 删除船模型实体（模型没有固定 id，用保存的引用删除）
+     const bd = boatDataRef.current[id]
+     if (bd?.entity) {
+       viewer.entities.remove(bd.entity)
+     }
+     // （可选加固）若仍有挂在该模型下的子实体，顺手清理
+     viewer.entities.values
+       .filter(en => en.parent === bd?.entity)
+       .forEach(en => viewer.entities.remove(en))
+     // 待移除的实体 ID 列表
+     const ids = [
+       id,
+       `${id}_nameLabel`,
+       `${id}_pulse`,
+       `${id}_trail_outer`,
+       `${id}_trail_inner`,
+       ...Array.from({ length: 8 }, (_, i) => `${id}_alt_${i + 1}`),
+       boatAlertRef.current[id]?.overlayId
+     ].filter(Boolean)
+
+     // 移除实体
+     ids.forEach(eid => {
+       const en = viewer.entities.getById(eid)
+       if (en) viewer.entities.remove(en)
+     })
+
+     // 清理各类引用与状态
+     delete indexRef.current[id]
+     delete boatDataRef.current[id]
+     delete boatAlertRef.current[id]
+
+     setIsPlayingMap(prev => { const { [id]: _, ...rest } = prev; return rest })
+     setBoatPredState(prev => { const { [id]: _, ...rest } = prev; return rest })
+     setBoats(prev => prev.filter(b => b.id !== id))
+     setAlerts(prev => prev.filter(a => a.boatId !== id))
+
+     viewer.scene.requestRender?.()
+   }
 
   // —— 演示船控制 —— //
   const handleStart = () => { viewerRef.current.clock.shouldAnimate = true; setIsPlaying(true) }
@@ -994,19 +1087,45 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
                   <div style={{ marginBottom: 8, opacity: .9 }}>
                     {boat.name} <span style={{ fontSize: 12, opacity: 0.6 }}>({boat.id})</span>
                   </div>
-                  <button onClick={() => startBoat(boat.id)} disabled={isPlayingMap[boat.id]} style={btnStyle}>开始</button>
-                  <button onClick={() => pauseBoat(boat.id)} disabled={!isPlayingMap[boat.id]} style={btnStyle}>暂停</button>
-                  <button onClick={() => resetBoat(boat.id)} style={btnStyle}>重置</button>
-
+                   <button
+                       onClick={() => startBoat(boat.id)}
+                       disabled={!!isPlayingMap[boat.id]}  // 播放中禁用“开始”
+                       style={btnStyle}
+                     >
+                       开始
+                     </button>
+                     <button
+                       onClick={() => pauseBoat(boat.id)}
+                       disabled={!isPlayingMap[boat.id]}  // 非播放中禁用“暂停”
+                       style={btnStyle}
+                     >
+                       暂停{!isPlayingMap[boat.id]} 
+                     </button>
+                     {/* <button
+                       onClick={() => resetBoat(boat.id)}
+                       style={btnStyle}
+                     >
+                       重置
+                     </button> */}
+                     <button onClick={() => deleteBoat(boat.id)} style={{ ...btnStyle, background: '#ff6b6b' }}>删除</button>                    
                   <button
                     onClick={() => {
                       setBoatPredState(prev => ({ ...prev, [boat.id]: { ...(prev[boat.id]||{}), isLoadingPred:true } }))
                       setTimeout(() => {
                         setBoatPredState(prev => ({ ...prev, [boat.id]: { ...(prev[boat.id]||{}), predUnlocked:true, predReady:true, isLoadingPred:false } }))
+                        boatPredState[boat.id].predReady = true
                         // 激活所有分支并自动播放
                         const bd = boatDataRef.current[boat.id]
-                        if (bd) { for (let t = 1; t <= 8; t++) bd.altState[t].active = true }
-                        startBoat(boat.id)
+                        
+                         if (bd) {
+                          for (const t of (bd.altTypes || [])) bd.altState[t].active = true
+                          // 先绘制预测阶段
+                          bd.phase = 'pred'
+                        }
+                        // startBoat(boat.id)
+                        if (!isPlayingMap[boat.id]) startBoat(boat.id)
+                        
+                        
                       }, 1000)
                     }}
                     disabled={!boatPredState[boat.id]?.predUnlocked || boatPredState[boat.id]?.predReady}
