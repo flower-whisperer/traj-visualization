@@ -105,6 +105,7 @@ function computeAlertLast24h() {
     values: Array.from(bins.values()),
   }
 }
+
 useEffect(() => {
   if (!trendDivRef.current) return
   if (!trendChartRef.current) {
@@ -179,6 +180,69 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
     })
     viewerRef.current = viewer
     viewer.scene.globe.depthTestAgainstTerrain = true
+    // —— 预设：禁渔区1 —— //
+
+
+  if (!viewer) return
+
+  // 注意 lat(N), lon(E) → { lon, lat }
+  const presetRegionCoords = [
+    { lon: 123.71840,  lat: 30.209179 },
+    { lon: 123.739311, lat: 30.203112 },
+    { lon: 123.732293, lat: 30.189894 },
+    { lon: 123.703319, lat: 30.198526 },
+  ]
+  const id   = 'region_preset_1'
+  const name = '禁渔区1'
+
+  const flat = presetRegionCoords.flatMap(p => [p.lon, p.lat])
+  const center = getCenterOfPositions(presetRegionCoords.map(p => [p.lon, p.lat]))
+
+  // 区域实体
+  const regionEntity = viewer.entities.add({
+    id,
+    polygon: {
+      hierarchy: Cesium.Cartesian3.fromDegreesArray(flat),
+      material: Cesium.Color.RED.withAlpha(0.35),   // 默认区域颜色
+      outline: true,
+      outlineColor: Cesium.Color.RED
+    },
+    label: {
+      text: name,
+      font: '16px sans-serif',
+      fillColor: Cesium.Color.BLACK,
+      showBackground: true,
+      backgroundColor: Cesium.Color.WHITE.withAlpha(0.7),
+      horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+      verticalOrigin: Cesium.VerticalOrigin.CENTER,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    },
+    position: center
+  })
+
+  // 顶点小点（默认黄点）
+  presetRegionCoords.forEach((p, i) => {
+    viewer.entities.add({
+      id: `${id}_point_${i}`,
+      parent: regionEntity,
+      position: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, 2),
+      point: { pixelSize: 6, color: Cesium.Color.YELLOW, disableDepthTestDistance: Number.POSITIVE_INFINITY }
+    })
+  })
+
+  // 几何缓存 & 控制台区域状态
+  regionGeomRef.current[id] = presetRegionCoords.map(({lon,lat}) => ({lon,lat}))
+  setRegions(prev => ([...prev, {
+    id,
+    name,
+    color: '#ff0000',     // 区域颜色（默认）
+    pointColor: '#ffff00',// 顶点颜色（默认）
+    visible: true,
+    restricted: true      // 禁渔区 → 会触发告警
+  }]))
+
+
+
 
     // FXAA + Bloom
     viewer.scene.postProcessStages.fxaa.enabled = true
@@ -209,7 +273,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
 
     // 自转
     let isRotating = true
-    const rotationSpeed = Cesium.Math.toRadians(30)
+    const rotationSpeed = Cesium.Math.toRadians(3)
     const rotationHandler = () => {
       if (isRotating) viewer.scene.camera.rotate(Cesium.Cartesian3.UNIT_Z, -rotationSpeed / 60)
     }
@@ -264,7 +328,7 @@ const [cursorLL, setCursorLL] = useState(null) // { lon, lat } | null
       if (firstClick) {
         firstClick = false
         viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(123.0, 30.0, 200000),
+          destination: Cesium.Cartesian3.fromDegrees(123.73, 30.1, 160000),
           orientation: { heading: 0, pitch: Cesium.Math.toRadians(-60), roll: 0 },
           duration: 4.0,
           maximumHeight: 5000000,
